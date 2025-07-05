@@ -1,0 +1,13 @@
+{
+    ApplicationDescription = "Simple application launcher for GNUstep dock integration";
+    ApplicationRelease = "1.0";
+    GSSuppressAppIcon = "YES";
+    LSUIElement = "YES";
+    NSServices = (
+        {
+            NSPortName = "XDGLauncher";
+            NSMessage = "handleLaunchRequest";
+            NSUserData = "";
+        }
+    );
+}
