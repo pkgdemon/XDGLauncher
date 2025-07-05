@@ -13,14 +13,41 @@
 
 - (void)applicationWillFinishLaunching:(NSNotification *)notification
 {
-    // Set up service for IPC - prevents multiple instances
+    // Suppress unnecessary notifications that cause INFO:(null) messages
+    [NSApp setApplicationIconImage:nil];
+    
+    // Check if we should customize the app name and icon
+    NSString *appName = [[[NSProcessInfo processInfo] environment] objectForKey:@"XDGLAUNCHER_APP_NAME"];
+    NSString *appIcon = [[[NSProcessInfo processInfo] environment] objectForKey:@"XDGLAUNCHER_APP_ICON"];
+    
+    if (appName) {
+        // Store the app name for later use - we can't modify NSBundle's info dictionary
+        // The app name will be shown in dock through the process name
+        NSLog(@"XDGLauncher running as: %@", appName);
+    }
+    
+    if (appIcon && [[NSFileManager defaultManager] fileExistsAtPath:appIcon]) {
+        // Set the application icon to match the wrapped app
+        NSImage *icon = [[NSImage alloc] initWithContentsOfFile:appIcon];
+        if (icon) {
+            [NSApp setApplicationIconImage:icon];
+            [icon release];
+        }
+    }
+    
+    // Create unique service name based on wrapped app
+    NSString *serviceName = appName ? 
+        [NSString stringWithFormat:@"XDGLauncher-%@", [appName stringByReplacingOccurrencesOfString:@" " withString:@""]] :
+        @"XDGLauncher";
+    
+    // Set up service for IPC - prevents multiple instances per app
     serviceConnection = [NSConnection defaultConnection];
     [serviceConnection setRootObject:self];
     
-    if (![serviceConnection registerName:@"XDGLauncher"]) {
-        // Another instance exists - send command and exit
+    if (![serviceConnection registerName:serviceName]) {
+        // Another instance exists for this app - send command and exit
         NSConnection *existing = [NSConnection 
-            connectionWithRegisteredName:@"XDGLauncher" host:nil];
+            connectionWithRegisteredName:serviceName host:nil];
         if (existing) {
             id<XDGLauncherService> proxy = (id<XDGLauncherService>)[existing rootProxy];
             [proxy handleLaunchRequest:[[NSProcessInfo processInfo] arguments]];
@@ -39,13 +66,16 @@
         
         if ([self isApplicationRunning:execPath]) {
             [self activateApplication:execPath];
+            // Exit after activation
+            [self performSelector:@selector(terminate:) withObject:nil afterDelay:1.0];
         } else {
             [self launchApplication:execPath withArguments:execArgs];
+            // Don't exit - stay running to represent the launched app
         }
+    } else {
+        // No arguments, just exit
+        [NSApp terminate:self];
     }
-    
-    // Keep app running briefly to handle the launch, then exit
-    [self performSelector:@selector(terminate:) withObject:nil afterDelay:1.0];
 }
 
 - (void)handleLaunchRequest:(NSArray *)arguments
@@ -86,12 +116,6 @@
             @"arguments": args ? args : @[],
             @"startTime": [NSDate date]
         } forKey:pid];
-        
-        // Notify dock about new running app
-        [[NSDistributedNotificationCenter defaultCenter]
-            postNotificationName:@"XDGAppLaunched"
-            object:executablePath
-            userInfo:@{@"pid": pid}];
         
         NSLog(@"Launched %@ with PID %d", executablePath, [task processIdentifier]);
         
@@ -185,14 +209,14 @@
     if (appInfo) {
         NSString *path = [appInfo objectForKey:@"path"];
         
-        // Notify dock that app terminated
-        [[NSDistributedNotificationCenter defaultCenter]
-            postNotificationName:@"XDGAppTerminated"
-            object:path
-            userInfo:@{@"pid": pid}];
-        
         [runningApps removeObjectForKey:pid];
         NSLog(@"Application %@ (PID %d) terminated", path, [pid intValue]);
+        
+        // If no more apps running, terminate XDGLauncher
+        if ([runningApps count] == 0) {
+            NSLog(@"No more applications running, terminating XDGLauncher");
+            [NSApp terminate:self];
+        }
     }
     
     // Remove observer
@@ -212,8 +236,7 @@
     [serviceConnection invalidate];
     
     // Don't terminate child processes - they should continue running
-    NSLog(@"XDGLauncher terminating, %lu apps still running", 
-          (unsigned long)[runningApps count]);
+    NSLog(@"XDGLauncher terminating");
 }
 
 @end
